@@ -127,7 +127,6 @@ def fetch_production_data(target_date, version='2차'):
         logging.error(f"DB 조회 오류: {e}")
         return None
 
-# ========== 🆕 추가: 과거 데이터 조회 ==========
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_historical_data(days=90):
     """과거 N일간의 데이터 조회 (모든 버전)"""
@@ -155,7 +154,6 @@ def fetch_historical_data(days=90):
         logging.error(f"과거 데이터 조회 오류: {e}")
         return None
 
-# ========== 🆕 추가: 문제 유형 감지 ==========
 def detect_issue_type(question):
     """질문에서 문제 유형 파악"""
     question_lower = question.lower()
@@ -171,7 +169,6 @@ def detect_issue_type(question):
     else:
         return '일반문의'
 
-# ========== 🆕 추가: 유사 사례 검색 ==========
 def find_similar_cases(historical_df, issue_type, target_date):
     """과거 데이터에서 유사 사례 찾기"""
     if historical_df is None or historical_df.empty:
@@ -181,7 +178,6 @@ def find_similar_cases(historical_df, issue_type, target_date):
         similar_cases = []
         
         if issue_type == 'CAPA초과':
-            # CAPA 90% 이상인 경우
             for line, info in CAPA_INFO.items():
                 line_data = historical_df[historical_df['line'] == line]
                 daily_sum = line_data.groupby('due_date')['quantity'].sum()
@@ -202,10 +198,8 @@ def find_similar_cases(historical_df, issue_type, target_date):
                         })
         
         elif issue_type == '요일위반':
-            # 요일 규칙 위반 사례
             historical_df['weekday'] = pd.to_datetime(historical_df['due_date']).dt.dayofweek
             
-            # FAN: 월(0), 수(2), 금(4) 아닌 날
             fan_violations = historical_df[
                 (historical_df['product_type'] == 'FAN') & 
                 (~historical_df['weekday'].isin([0, 2, 4]))
@@ -222,7 +216,6 @@ def find_similar_cases(historical_df, issue_type, target_date):
                 })
         
         elif issue_type == '배수문제':
-            # PLT 태그가 있는 사례
             plt_cases = historical_df[
                 historical_df['remark'].str.contains('\[PLT\]', na=False, regex=True)
             ]
@@ -237,40 +230,40 @@ def find_similar_cases(historical_df, issue_type, target_date):
                     'worker_memo': row.get('worker_memo', '')
                 })
         
-        # 최근 5건만 반환
         return similar_cases[:5] if similar_cases else None
         
     except Exception as e:
         logging.error(f"유사 사례 검색 오류: {e}")
         return None
 
-def compare_versions(df_0, df_2):
-    """0차와 2차 버전 비교"""
-    if df_0 is None or df_2 is None:
+def compare_versions(df_base, df_final):
+    """기준 버전(0차 또는 1차)과 최종 버전(2차) 비교"""
+    if df_base is None or df_final is None:
         return None
     
     try:
+        base_version = df_base['version'].iloc[0] if 'version' in df_base.columns and len(df_base) > 0 else '0차'
+        
         merged = pd.merge(
-            df_0[['due_date', 'line', 'product_name', 'product_type', 'quantity']],
-            df_2[['due_date', 'line', 'product_name', 'product_type', 'quantity', 'status', 'remark', 'worker_memo']],
+            df_base[['due_date', 'line', 'product_name', 'product_type', 'quantity']],
+            df_final[['due_date', 'line', 'product_name', 'product_type', 'quantity', 'status', 'remark', 'worker_memo']],
             on=['due_date', 'line', 'product_name', 'product_type'],
             how='outer',
-            suffixes=('_0차', '_2차')
+            suffixes=(f'_{base_version}', '_2차')
         )
         
-        merged['quantity_0차'] = merged['quantity_0차'].fillna(0)
+        merged[f'quantity_{base_version}'] = merged[f'quantity_{base_version}'].fillna(0)
         merged['quantity_2차'] = merged['quantity_2차'].fillna(0)
-        merged['qty_diff'] = merged['quantity_2차'] - merged['quantity_0차']
+        merged['qty_diff'] = merged['quantity_2차'] - merged[f'quantity_{base_version}']
         merged['changed'] = merged['qty_diff'] != 0
+        merged['base_version'] = base_version
         
-        logging.info(f"버전 비교 완료: 총 {len(merged)}건, 변경 {merged['changed'].sum()}건")
+        logging.info(f"{base_version} vs 2차 비교 완료: 총 {len(merged)}건, 변경 {merged['changed'].sum()}건")
         return merged
         
     except Exception as e:
         logging.error(f"버전 비교 오류: {e}")
         return None
-
-# ==================== 데이터 분석 함수 ====================
 
 def analyze_data(df, version='2차'):
     """생산 데이터 종합 분석"""
@@ -327,8 +320,6 @@ def analyze_data(df, version='2차'):
         logging.error(f"데이터 분석 오류: {e}")
         return {'version': version, 'error': str(e)}
 
-# ==================== 🆕 수정: AI 분석 함수 (과거 패턴 포함) ====================
-
 @st.cache_data(ttl=300, show_spinner=False)
 def ask_professional_scheduler(question, df_json, analysis_json, comparison_json=None, historical_cases_json=None, original_plan_json=None):
     """Potens AI API 호출 - 과거 패턴 학습 포함"""
@@ -354,13 +345,11 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
             }
         }
         
-        # ========== 🆕 1차 계획 비교 ==========
         original_plan_summary = ""
         if original_plan_json:
             original_df = json.loads(original_plan_json)
             original_plan_summary = f"\n\n[📋 1차 원래 계획]\n총 {len(original_df.get('due_date', {}))}건"
         
-        # ========== 🆕 과거 사례 요약 ==========
         historical_summary = ""
         if historical_cases_json:
             historical_cases = json.loads(historical_cases_json)
@@ -392,7 +381,6 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
         
         violations_summary = "\n".join(violations) if violations else "✅ 요일 규칙 위반 없음"
         
-        # ========== 🆕 개선된 시스템 프롬프트 ==========
         system_prompt = f"""당신은 자동차 부품 조립라인의 '수석 생산 스케줄러'입니다.
 **과거 데이터를 학습하여 실제 해결 사례 기반으로 조언하세요.**
 
@@ -456,8 +444,6 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
         logging.error(error_msg)
         return error_msg
 
-# ==================== 대시보드 컴포넌트 ====================
-
 def render_dashboard(analysis, target_date):
     """CAPA 현황 대시보드"""
     st.subheader(f"📈 라인별 CAPA 현황 ({target_date})")
@@ -512,7 +498,6 @@ def render_violations(analysis):
                     icon = "📦" if is_plt else "⚠️"
                     st.caption(f"{icon} {v['due_date']} ({v['weekday_kr']}): {v['product_name']}")
 
-# ========== 🆕 추가: 과거 사례 표시 컴포넌트 ==========
 def render_historical_cases(cases):
     """과거 유사 사례 표시"""
     if not cases:
@@ -537,8 +522,6 @@ def render_historical_cases(cases):
                 if case.get('worker_memo'):
                     st.write(f"**담당자 메모**: {case['worker_memo']}")
 
-# ==================== 🆕 수정: UI 구성 (과거 패턴 통합) ====================
-
 def main():
     st.set_page_config(
         page_title="수석 스케줄러 AI 관제 센터",
@@ -557,7 +540,6 @@ def main():
     if "current_df" not in st.session_state:
         st.session_state.current_df = None
     
-    # ========== 🆕 과거 데이터 로드 ==========
     with st.spinner("과거 데이터 로딩 중..."):
         historical_data = fetch_historical_data(days=90)
         if historical_data is not None:
@@ -578,8 +560,8 @@ def main():
         
         version_option = st.radio(
             "📂 분석 대상",
-            options=['2차 (실제 조정본)', '1차 vs 2차 비교 (과거 패턴 포함)'],
-            help="2차: 최종 조정된 계획 / 비교: 초기 계획 대비 변경사항 + 과거 사례"
+            options=['2차 (최종 조정본)', '변경사항 비교 (과거 패턴 포함)'],
+            help="2차: 최종 조정된 계획 / 비교: 1차 있으면 1차 대비, 없으면 0차 대비 변경사항 + 과거 유사 사례"
         )
         
         st.divider()
@@ -640,28 +622,35 @@ def main():
             else:
                 with st.spinner("🤖 AI가 과거 패턴을 분석 중입니다..."):
                     try:
-                        # ========== 🆕 문제 유형 감지 및 과거 사례 검색 ==========
                         issue_type = detect_issue_type(prompt)
                         similar_cases = find_similar_cases(historical_data, issue_type, target_date)
                         
                         if '비교' in version_option:
-                            # ========== 🆕 1차 vs 2차 비교 + 과거 패턴 ==========
-                            df_1 = fetch_production_data(target_date, version='1차')
                             df_2 = fetch_production_data(target_date, version='2차')
+                            df_1 = fetch_production_data(target_date, version='1차')
                             
-                            if df_1 is None or df_2 is None:
+                            if df_1 is None or df_1.empty:
+                                df_base = fetch_production_data(target_date, version='0차')
+                                comparison_type = "0차(원본) vs 2차(최종)"
+                            else:
+                                df_base = df_1
+                                comparison_type = "1차(팀원 배분) vs 2차(최종)"
+                            
+                            if df_base is None or df_2 is None:
                                 with st.chat_message("assistant"):
-                                    error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다.\n1차 데이터: {'있음' if df_1 is not None else '없음'}\n2차 데이터: {'있음' if df_2 is not None else '없음'}"
+                                    error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다.\n기준 데이터: {'있음' if df_base is not None else '없음'}\n2차 데이터: {'있음' if df_2 is not None else '없음'}"
                                     st.error(error_msg)
                                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
                             else:
-                                comp_df = compare_versions(df_1, df_2)
+                                comp_df = compare_versions(df_base, df_2)
                                 analysis = analyze_data(df_2)
+                                
+                                base_version = comp_df['base_version'].iloc[0] if 'base_version' in comp_df.columns else '0차'
                                 
                                 df_json = df_2.to_json(orient='columns')
                                 analysis_json = json.dumps(analysis, ensure_ascii=False)
                                 comp_json = comp_df.to_json(orient='columns')
-                                original_plan_json = df_1.to_json(orient='columns')
+                                original_plan_json = df_base.to_json(orient='columns')
                                 historical_cases_json = json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None
                                 
                                 answer = ask_professional_scheduler(
@@ -674,6 +663,7 @@ def main():
                                 )
                                 
                                 with st.chat_message("assistant"):
+                                    st.markdown(f"**📊 비교 기준**: {comparison_type}\n\n")
                                     st.markdown(answer)
                                     st.session_state.messages.append({"role": "assistant", "content": answer})
                                 
@@ -683,18 +673,21 @@ def main():
                                 st.session_state.similar_cases = similar_cases
                                 
                                 with right_col:
-                                    st.subheader(f"📊 비교 데이터 ({date_val})")
+                                    st.subheader(f"📊 {comparison_type} ({date_val})")
                                     
                                     show_changed_only = st.checkbox("변경된 항목만 보기", value=True)
                                     display_df = comp_df[comp_df['changed']] if show_changed_only else comp_df
                                     
+                                    display_columns = ['due_date', 'line', 'product_name', 
+                                                      f'quantity_{base_version}', 'quantity_2차', 
+                                                      'qty_diff', 'status', 'remark', 'worker_memo']
+                                    
                                     st.dataframe(
-                                        display_df[['due_date', 'line', 'product_name', 'quantity_1차', 'quantity_2차', 'qty_diff', 'status', 'remark', 'worker_memo']],
+                                        display_df[display_columns],
                                         use_container_width=True,
                                         height=300
                                     )
                                     
-                                    # ========== 🆕 과거 사례 표시 ==========
                                     if similar_cases:
                                         render_historical_cases(similar_cases)
                                     
@@ -707,9 +700,11 @@ def main():
                                     )
                         
                         else:
-                            # ========== 🆕 2차 단독 + 과거 패턴 ==========
                             df = fetch_production_data(target_date, version='2차')
+                            
                             df_1 = fetch_production_data(target_date, version='1차')
+                            if df_1 is None or df_1.empty:
+                                df_1 = fetch_production_data(target_date, version='0차')
                             
                             if df is None:
                                 with st.chat_message("assistant"):
@@ -759,7 +754,6 @@ def main():
                                         height=300
                                     )
                                     
-                                    # ========== 🆕 과거 사례 표시 ==========
                                     if similar_cases:
                                         render_historical_cases(similar_cases)
                                     
