@@ -97,21 +97,19 @@ def convert_df_to_excel(df):
 # ==================== 데이터 조회 함수 ====================
 
 @st.cache_data(ttl=600, show_spinner=False)
-def fetch_production_data(target_date, version='2차'):
-    """DB에서 생산 데이터 조회"""
+def fetch_production_data(target_date, version='2차', date_type='due_date'):
+    """
+    DB에서 생산 데이터 조회 
+    date_type: 'due_date'(납기일 기준) 또는 'production_date'(생산일 기준)
+    """
     try:
-        start_date, end_date = get_date_range(target_date)
-        if not start_date:
-            logging.warning(f"날짜 범위 계산 실패: {target_date}")
-            return None
+        logging.info(f"DB 조회 시작: {version} 버전, 기준일 {target_date}, 기준컬럼 {date_type}")
         
-        logging.info(f"DB 조회 시작: {version}, {start_date} ~ {end_date}")
-        
+        # 특정 날짜 하나에 대해 조회 (날짜 타입 불일치 방지를 위해 .eq 사용)
         response = supabase.table(TABLE_NAME)\
             .select("*")\
             .eq("version", version)\
-            .gte("due_date", start_date)\
-            .lte("due_date", end_date)\
+            .eq(date_type, target_date)\
             .order("due_date", desc=False)\
             .execute()
         
@@ -120,8 +118,12 @@ def fetch_production_data(target_date, version='2차'):
             logging.info(f"데이터 조회 성공: {len(df)}건")
             return df
         else:
-            logging.warning(f"조회 결과 없음: {version}, {target_date}")
+            logging.warning(f"조회 결과 없음: {version}, {target_date} ({date_type})")
             return None
+            
+    except Exception as e:
+        logging.error(f"DB 조회 오류: {e}")
+        return None
             
     except Exception as e:
         logging.error(f"DB 조회 오류: {e}")
@@ -384,6 +386,11 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
         system_prompt = f"""당신은 자동차 부품 조립라인의 '수석 생산 스케줄러'입니다.
 **과거 데이터를 학습하여 실제 해결 사례 기반으로 조언하세요.**
 
+[날짜 개념 정의]
+- **due_date (납기일)**: 고객과 약속한 날짜
+- **production_date (생산일)**: 실제 공장에서 가동하는 날짜
+- **분석 규칙**: 생산일이 납기일보다 빠르면 '선행 생산', 늦으면 '지연 생산'입니다. 이 차이를 반드시 언급하세요.
+
 [핵심 규칙]
 1. **[PLT] 태그**: remark에 '[PLT]' 포함 시 → 배수 무시, 박스/로트 단위 우선
 2. **요일 규칙**: 조립2 - FAN(월수금), FLANGE(화목)
@@ -603,6 +610,10 @@ def main():
             del st.session_state.quick_question
         
         if prompt:
+            질문에 '생산'이라는 말이 있으면 생산일(production_date)로 검색하도록 설정
+            is_production_query = any(k in prompt for k in ['생산일', '생산계획', '가동일', '언제 생산'])
+            search_col = 'production_date' if is_production_query else 'due_date'
+
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
@@ -626,8 +637,8 @@ def main():
                         similar_cases = find_similar_cases(historical_data, issue_type, target_date)
                         
                         if '비교' in version_option:
-                            df_2 = fetch_production_data(target_date, version='2차')
-                            df_1 = fetch_production_data(target_date, version='1차')
+                            df_2 = fetch_production_data(target_date, version='2차', date_type=search_col)
+                            df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
                             
                             if df_1 is None or df_1.empty:
                                 df_base = fetch_production_data(target_date, version='0차')
@@ -700,7 +711,7 @@ def main():
                                     )
                         
                         else:
-                            df = fetch_production_data(target_date, version='2차')
+                            df = fetch_production_data(target_date, version='2차', date_type=search_col)
                             
                             df_1 = fetch_production_data(target_date, version='1차')
                             if df_1 is None or df_1.empty:
