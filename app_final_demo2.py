@@ -9,7 +9,6 @@ import logging
 from io import BytesIO
 import json
 
-# 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -18,8 +17,6 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-# ==================== 설정 및 초기화 ====================
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://suaajrdahixouinbfcfo.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN1YWFqcmRhaGl4b3VpbmJmY2ZvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYzMTk4NzAsImV4cCI6MjA4MTg5NTg3MH0.Ic4izQY-ihIw75jKh9iJicZvuZ4gCRs4OH3rCGyo0Zk")
@@ -30,7 +27,6 @@ try:
     logging.info("Supabase 연결 성공")
 except Exception as e:
     logging.error(f"Supabase 연결 실패: {e}")
-    st.error("⚠️ 데이터베이스 연결에 실패했습니다.")
 
 TABLE_NAME = "pattern_learning2"
 
@@ -40,10 +36,7 @@ CAPA_INFO = {
     "조립3": 2000
 }
 
-# ==================== 유틸리티 함수 ====================
-
 def parse_date(date_str):
-    """날짜 문자열을 YYYY-MM-DD 형식으로 변환"""
     try:
         if '/' in date_str:
             parts = date_str.split('/')
@@ -62,7 +55,6 @@ def parse_date(date_str):
         return None
 
 def get_date_range(target_date, days_before=14, days_after=7):
-    """목표 날짜 기준으로 조회 범위 계산"""
     try:
         dt = datetime.strptime(target_date, '%Y-%m-%d')
         start = (dt - timedelta(days=days_before)).strftime('%Y-%m-%d')
@@ -73,38 +65,27 @@ def get_date_range(target_date, days_before=14, days_after=7):
         return None, None
 
 def convert_df_to_excel(df):
-    """DataFrame을 Excel 파일로 변환"""
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Schedule')
-        
         workbook = writer.book
         worksheet = writer.sheets['Schedule']
-        
         header_format = workbook.add_format({
             'bold': True,
             'bg_color': '#4472C4',
             'font_color': 'white',
             'border': 1
         })
-        
         for col_num, value in enumerate(df.columns.values):
             worksheet.write(0, col_num, value, header_format)
             worksheet.set_column(col_num, col_num, 15)
-    
     return output.getvalue()
 
-# ==================== 데이터 조회 함수 ====================
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_production_data(target_date, version='2차', date_type='due_date'):
-    """
-    DB에서 생산 데이터 조회 
-    date_type: 'due_date'(납기일 기준) 또는 'production_date'(생산일 기준)
-    """
     try:
         start_date, end_date = get_date_range(target_date)
         if not start_date:
-            logging.warning(f"날짜 범위 계산 실패: {target_date}")
             return None
         
         logging.info(f"DB 조회: {version}, {date_type}, {start_date}~{end_date}")
@@ -121,23 +102,16 @@ def fetch_production_data(target_date, version='2차', date_type='due_date'):
             df = pd.DataFrame(response.data)
             logging.info(f"조회 성공: {len(df)}건")
             return df
-        else:
-            logging.warning(f"조회 결과 없음: {version}, {target_date}")
-            return None
-            
+        return None
     except Exception as e:
         logging.error(f"DB 조회 오류: {e}")
         return None
 
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_historical_data(days=90):
-    """과거 N일간의 데이터 조회 (모든 버전)"""
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        
-        logging.info(f"과거 데이터 조회: {start_date} ~ {end_date}")
         
         response = supabase.table(TABLE_NAME)\
             .select("*")\
@@ -147,20 +121,14 @@ def fetch_historical_data(days=90):
             .execute()
         
         if response.data:
-            df = pd.DataFrame(response.data)
-            logging.info(f"과거 데이터 조회 성공: {len(df)}건")
-            return df
-        else:
-            return None
-            
+            return pd.DataFrame(response.data)
+        return None
     except Exception as e:
         logging.error(f"과거 데이터 조회 오류: {e}")
         return None
 
 def detect_issue_type(question):
-    """질문에서 문제 유형 파악"""
     question_lower = question.lower()
-    
     if any(keyword in question_lower for keyword in ['capa', '초과', '가동률', '부하']):
         return 'CAPA초과'
     elif any(keyword in question_lower for keyword in ['요일', 'fan', 'flange', '규칙']):
@@ -173,7 +141,6 @@ def detect_issue_type(question):
         return '일반문의'
 
 def find_similar_cases(historical_df, issue_type, target_date):
-    """과거 데이터에서 유사 사례 찾기"""
     if historical_df is None or historical_df.empty:
         return None
     
@@ -196,18 +163,16 @@ def find_similar_cases(historical_df, issue_type, target_date):
                             'date': date,
                             'line': line,
                             'quantity': qty,
-                            'remark': case_data['remark'].iloc[0] if 'remark' in case_data else '',
-                            'worker_memo': case_data['worker_memo'].iloc[0] if 'worker_memo' in case_data else ''
+                            'remark': case_data['remark'].iloc[0] if 'remark' in case_data.columns else '',
+                            'worker_memo': case_data['worker_memo'].iloc[0] if 'worker_memo' in case_data.columns else ''
                         })
         
         elif issue_type == '요일위반':
             historical_df['weekday'] = pd.to_datetime(historical_df['due_date']).dt.dayofweek
-            
             fan_violations = historical_df[
                 (historical_df['product_type'] == 'FAN') & 
                 (~historical_df['weekday'].isin([0, 2, 4]))
             ]
-            
             for _, row in fan_violations.head(5).iterrows():
                 similar_cases.append({
                     'date': row['due_date'],
@@ -222,7 +187,6 @@ def find_similar_cases(historical_df, issue_type, target_date):
             plt_cases = historical_df[
                 historical_df['remark'].str.contains('\[PLT\]', na=False, regex=True)
             ]
-            
             for _, row in plt_cases.head(5).iterrows():
                 similar_cases.append({
                     'date': row['due_date'],
@@ -234,15 +198,12 @@ def find_similar_cases(historical_df, issue_type, target_date):
                 })
         
         return similar_cases[:5] if similar_cases else None
-        
     except Exception as e:
         logging.error(f"유사 사례 검색 오류: {e}")
         return None
 
 def compare_versions(df_base, df_final):
-    """기준 버전(0차 또는 1차)과 최종 버전(2차) 비교"""
     if df_base is None or df_final is None or df_base.empty or df_final.empty:
-        logging.warning("비교할 데이터 중 하나가 비어있습니다.")
         return None
     
     try:
@@ -262,16 +223,13 @@ def compare_versions(df_base, df_final):
         merged['changed'] = merged['qty_diff'] != 0
         merged['base_version'] = base_version
         
-        logging.info(f"{base_version} vs 2차 비교 완료: 총 {len(merged)}건, 변경 {merged['changed'].sum()}건")
+        logging.info(f"{base_version} vs 2차 비교 완료: {len(merged)}건, 변경 {merged['changed'].sum()}건")
         return merged
-        
     except Exception as e:
         logging.error(f"버전 비교 오류: {e}")
         return None
 
-
 def analyze_data(df, version='2차'):
-    """생산 데이터 종합 분석"""
     try:
         analysis = {'version': version}
         
@@ -301,33 +259,25 @@ def analyze_data(df, version='2차'):
         bergstrom_days = bergstrom_data.groupby('due_date')[qty_col].sum().to_dict()
         
         line2_data = df[df['line'] == '조립2'].copy()
-        
         fan_data = line2_data[line2_data['product_type'] == 'FAN']
         fan_wrong = fan_data[~fan_data['weekday_kr'].isin(['월', '수', '금'])]
-        
         flange_data = line2_data[line2_data['product_type'] == 'FLANGE']
         flange_wrong = flange_data[~flange_data['weekday_kr'].isin(['화', '목'])]
-        
         line2_daily_products = line2_data.groupby('due_date')['product_name'].nunique()
         
         analysis['bergstrom_days'] = bergstrom_days
         analysis['fan_violations'] = fan_wrong[['due_date', 'product_name', qty_col, 'weekday_kr', 'remark']].to_dict('records')
         analysis['flange_violations'] = flange_wrong[['due_date', 'product_name', qty_col, 'weekday_kr', 'remark']].to_dict('records')
         analysis['line2_over_5products'] = line2_daily_products[line2_daily_products > 5].to_dict()
+        analysis['status_summary'] = df['status'].value_counts().to_dict()
         
-        status_summary = df['status'].value_counts().to_dict()
-        analysis['status_summary'] = status_summary
-        
-        logging.info(f"데이터 분석 완료: {version}")
         return analysis
-        
     except Exception as e:
         logging.error(f"데이터 분석 오류: {e}")
         return {'version': version, 'error': str(e)}
 
 @st.cache_data(ttl=300, show_spinner=False)
 def ask_professional_scheduler(question, df_json, analysis_json, comparison_json=None, historical_cases_json=None, original_plan_json=None):
-    """Potens AI API 호출 - 과거 패턴 학습 포함"""
     api_url = "https://ai.potens.ai/api/chat"
     headers = {
         "Content-Type": "application/json",
@@ -337,17 +287,11 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
     try:
         df_dict = json.loads(df_json)
         analysis = json.loads(analysis_json)
-        
         version = analysis.get('version', '2차')
         
         data_summary = {
             "총_데이터_건수": len(df_dict.get('due_date', {})),
-            "분석_기간": f"{min(df_dict.get('due_date', {}).values())} ~ {max(df_dict.get('due_date', {}).values())}" if df_dict.get('due_date') else "N/A",
-            "라인별_평균_가동률": {
-                line: f"{info.get('avg_utilization', 0):.1f}%"
-                for line, info in analysis.items()
-                if line.startswith("조립")
-            }
+            "분석_기간": f"{min(df_dict.get('due_date', {}).values())} ~ {max(df_dict.get('due_date', {}).values())}" if df_dict.get('due_date') else "N/A"
         }
         
         original_plan_summary = ""
@@ -368,104 +312,60 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
                         historical_summary += f" | {case['quantity']}개"
                     if case.get('remark'):
                         historical_summary += f"\n   조치: {case['remark'][:50]}"
-                    if case.get('worker_memo'):
-                        historical_summary += f"\n   메모: {case['worker_memo'][:50]}"
         
         change_summary = ""
         if comparison_json:
             comp_dict = json.loads(comparison_json)
             changed_count = sum(1 for v in comp_dict.get('changed', {}).values() if v)
             if changed_count > 0:
-                change_summary = f"\n\n[📊 0차 대비 2차 변경사항]\n총 {changed_count}건 변경됨"
+                change_summary = f"\n\n[📊 변경사항]\n총 {changed_count}건 변경됨"
         
         violations = []
         if analysis.get('fan_violations'):
             violations.append(f"⚠️ FAN 요일규칙 위반: {len(analysis['fan_violations'])}건")
         if analysis.get('flange_violations'):
             violations.append(f"⚠️ FLANGE 요일규칙 위반: {len(analysis['flange_violations'])}건")
-        
         violations_summary = "\n".join(violations) if violations else "✅ 요일 규칙 위반 없음"
         
         system_prompt = f"""당신은 자동차 부품 조립라인의 '수석 생산 스케줄러'입니다.
-**과거 데이터를 학습하여 실제 해결 사례 기반으로 조언하세요.**
-
-[날짜 개념 정의]
-- **due_date (납기일)**: 고객과 약속한 날짜
-- **production_date (생산일)**: 실제 공장에서 가동하는 날짜
-- **분석 규칙**: 생산일이 납기일보다 빠르면 '선행 생산', 늦으면 '지연 생산'입니다. 이 차이를 반드시 언급하세요.
+과거 데이터를 학습하여 실제 해결 사례 기반으로 조언하세요.
 
 [핵심 규칙]
-1. **[PLT] 태그**: remark에 '[PLT]' 포함 시 → 배수 무시, 박스/로트 단위 우선
-2. **요일 규칙**: 조립2 - FAN(월수금), FLANGE(화목)
-3. **CAPA 제약**: 조립1(3000), 조립2(2500), 조립3(2000) - 90% 목표
+1. [PLT] 태그: remark에 '[PLT]' 포함 시 → 배수 무시
+2. 요일 규칙: 조립2 - FAN(월수금), FLANGE(화목)
+3. CAPA 제약: 조립1(3000), 조립2(2500), 조립3(2000) - 90% 목표
 
-[현재 데이터 요약 - {version}]
-{json.dumps(data_summary, ensure_ascii=False, indent=2)}
+[현재 데이터 - {version}]
+{json.dumps(data_summary, ensure_ascii=False)}
 {original_plan_summary}
 {change_summary}
-
-[위반사항]
 {violations_summary}
-
 {historical_summary}
 
 [출력 형식]
-1. **상황 진단** (2-3줄 요약)
-2. **과거 사례 참고** (유사 상황에서 어떻게 해결했는지)
-3. **대안 1**: [과거 성공 사례 기반]
-4. **대안 2**: [예비 방안]
-5. **대안 3**: [장기 개선안]
-6. **즉시 조치 사항** (있을 경우)
-
-**중요**: 
-- [PLT] 태그가 있는 항목은 정상으로 간주
-- 과거 사례의 remark와 worker_memo를 참고하여 실제 현장에서 사용한 방법 우선 제안
-- 1차 계획과 비교하여 무엇이 변경되었는지 언급
+1. 상황 진단
+2. 과거 사례 참고
+3. 대안 1, 2, 3
+4. 즉시 조치 사항
 """
         
-        payload = {
-            "prompt": f"{system_prompt}\n\n[긴급 요청]\n{question}"
-        }
-        
-        logging.info(f"AI 요청 전송 (과거 패턴 포함): {question[:50]}...")
-        
-        response = requests.post(
-            api_url,
-            headers=headers,
-            json=payload,
-            timeout=90
-        )
+        payload = {"prompt": f"{system_prompt}\n\n[긴급 요청]\n{question}"}
+        response = requests.post(api_url, headers=headers, json=payload, timeout=90)
         
         if response.status_code == 200:
-            result = response.json().get('message', '응답 형식 오류')
-            logging.info("AI 응답 수신 성공")
-            return result
-        else:
-            error_msg = f"❌ API 오류 (코드: {response.status_code}): {response.text}"
-            logging.error(error_msg)
-            return error_msg
-            
-    except requests.Timeout:
-        error_msg = "⏱️ 요청 시간 초과 (90초). 잠시 후 다시 시도해주세요."
-        logging.error(error_msg)
-        return error_msg
+            return response.json().get('message', '응답 형식 오류')
+        return f"❌ API 오류: {response.status_code}"
     except Exception as e:
-        error_msg = f"❌ 요청 실패: {str(e)}"
-        logging.error(error_msg)
-        return error_msg
+        return f"❌ 요청 실패: {str(e)}"
 
-# ✅ 수정된 코드
-def render_dashboard(analysis, target_date):
-    """CAPA 현황 대시보드 - 일일 초과 현황만"""
+def render_dashboard(analysis, target_date, highlight_date=None):
     st.subheader(f"📈 일일 CAPA 초과 현황")
-    
     cols = st.columns(3)
     
     for idx, line in enumerate(["조립1", "조립2", "조립3"]):
         if line in analysis:
             info = analysis[line]
             over_days = info.get('over_capacity_days', {})
-            max_capa = info['max_capa']
             target_90 = info['target_90']
             
             with cols[idx]:
@@ -474,32 +374,23 @@ def render_dashboard(analysis, target_date):
                     st.caption(f"⚠️ CAPA 초과: {len(over_days)}일")
                     st.caption(f"기준: {target_90:,}개 (90%)")
                     
-                    # 초과 날짜 상세 (모두 표시)
                     for date, qty in sorted(over_days.items()):
                         over_percent = ((qty - target_90) / target_90 * 100)
-                        st.caption(f"• {date}: {qty:,}개 (+{over_percent:.0f}%)")
+                        if highlight_date and date == highlight_date:
+                            st.warning(f"🎯 **{date}: {qty:,}개 (+{over_percent:.0f}%)**")
+                        else:
+                            st.caption(f"• {date}: {qty:,}개 (+{over_percent:.0f}%)")
                 else:
                     st.success(f"**{line}**")
                     st.caption(f"✅ 모든 날짜 CAPA 정상")
                     st.caption(f"기준: {target_90:,}개 (90%)")
 
-                
-                over_days = info.get('over_capacity_days', {})
-                if over_days:
-                    st.warning(f"⚠️ CAPA 초과: {len(over_days)}일")
-                    for date, qty in list(over_days.items())[:3]:
-                        st.caption(f"  • {date}: {qty:,}개")
-                else:
-                    st.success("✅ CAPA 정상")
-
 def render_violations(analysis):
-    """요일 규칙 위반 현황"""
     fan_violations = analysis.get('fan_violations', [])
     flange_violations = analysis.get('flange_violations', [])
     
     if fan_violations or flange_violations:
         st.subheader("⚠️ 요일 규칙 위반 현황")
-        
         col1, col2 = st.columns(2)
         
         with col1:
@@ -519,12 +410,10 @@ def render_violations(analysis):
                     st.caption(f"{icon} {v['due_date']} ({v['weekday_kr']}): {v['product_name']}")
 
 def render_historical_cases(cases):
-    """과거 유사 사례 표시"""
     if not cases:
         return
     
     st.subheader("🔍 과거 유사 사례")
-    
     for idx, case in enumerate(cases, 1):
         with st.expander(f"사례 {idx}: {case.get('date', 'N/A')}"):
             cols = st.columns(2)
@@ -535,7 +424,6 @@ def render_historical_cases(cases):
                     st.write(f"**수량**: {case['quantity']:,}개")
                 if 'product' in case:
                     st.write(f"**제품**: {case['product']}")
-            
             with cols[1]:
                 if case.get('remark'):
                     st.write(f"**조치사항**: {case['remark']}")
@@ -550,8 +438,8 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    st.title("👨‍✈️ 수석 스케줄러 AI 통합 제어 센터 (과거 패턴 학습)")
-    st.caption("Real-time Production Scheduling with AI Assistant & Historical Pattern Learning")
+    st.title("👨‍✈️ 수석 스케줄러 AI 통합 제어 센터")
+    st.caption("Real-time Production Scheduling with AI & Historical Pattern Learning")
     
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -562,10 +450,6 @@ def main():
     
     with st.spinner("과거 데이터 로딩 중..."):
         historical_data = fetch_historical_data(days=90)
-        if historical_data is not None:
-            st.sidebar.success(f"✅ 과거 90일 데이터 로드 완료 ({len(historical_data)}건)")
-        else:
-            st.sidebar.warning("⚠️ 과거 데이터 없음")
     
     with st.sidebar:
         st.header("⚙️ 설정")
@@ -581,17 +465,17 @@ def main():
         version_option = st.radio(
             "📂 분석 대상",
             options=['2차 (최종 조정본)', '변경사항 비교 (과거 패턴 포함)'],
-            help="2차: 최종 조정된 계획 / 비교: 1차 있으면 1차 대비, 없으면 0차 대비 변경사항 + 과거 유사 사례"
+            help="2차: 최종 조정 / 비교: 1차/0차 대비 변경사항 + 과거 사례"
         )
         
         st.divider()
         st.subheader("💡 빠른 질문")
         
         quick_questions = {
-            "CAPA 초과 분석 (과거 사례 포함)": f"{selected_date.month}/{selected_date.day} CAPA 초과 날짜 분석해줘. 과거에는 어떻게 해결했어?",
-            "요일 규칙 위반 (과거 사례)": f"{selected_date.month}/{selected_date.day} 요일 규칙 위반 확인하고 과거 해결 방법 알려줘",
-            "1차 대비 변경사항": f"{selected_date.month}/{selected_date.day} 1차 계획 대비 무엇이 변경되었고 왜 변경했는지 분석해줘",
-            "긴급 조치 필요 (과거 참고)": f"{selected_date.month}/{selected_date.day} 긴급 조치가 필요한 항목과 과거 성공 사례 알려줘"
+            "CAPA 초과 분석": f"{selected_date.month}/{selected_date.day} CAPA 초과 분석해줘",
+            "요일 규칙 위반": f"{selected_date.month}/{selected_date.day} 요일 규칙 위반 확인해줘",
+            "변경사항 분석": f"{selected_date.month}/{selected_date.day} 변경사항 분석해줘",
+            "긴급 조치 필요": f"{selected_date.month}/{selected_date.day} 긴급 조치 알려줘"
         }
         
         for label, question in quick_questions.items():
@@ -599,113 +483,98 @@ def main():
                 st.session_state.quick_question = question
         
         st.divider()
-        st.caption(f"🔄 마지막 업데이트: {datetime.now().strftime('%H:%M:%S')}")
-        st.caption(f"💾 캐시 상태: {'활성' if st.session_state.current_df is not None else '비활성'}")
+        st.caption(f"🔄 업데이트: {datetime.now().strftime('%H:%M:%S')}")
         st.caption(f"📚 과거 데이터: {len(historical_data) if historical_data is not None else 0}건")
     
     dashboard_container = st.container()
-    
     left_col, right_col = st.columns([1, 1.2])
     
     with left_col:
         st.subheader("💬 AI 상담 창구")
         
-                with chat_container:
-            for msg in st.session_state.messages:
-                with st.chat_message(msg["role"]):
-                    st.markdown(msg["content"])
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
         
-                prompt = st.chat_input("질문을 입력하세요...")  # ← 들여쓰기 틀림 (공백 16개)
-
+        prompt = st.chat_input("질문을 입력하세요 (예: 11/14 조립1 CAPA 초과 어떻게 해?)")
+        
         if "quick_question" in st.session_state:
             prompt = st.session_state.quick_question
             del st.session_state.quick_question
         
-        if prompt:  # ← 들여쓰기 수정 (공백 8개)
-            # 1. 질문 분석
-            is_production_query = any(k in prompt for k in ['생산', '가동', '계획', '작업'])
+        if prompt:
+            is_production_query = any(k in prompt for k in ['생산', '가동'])
             search_col = 'production_date' if is_production_query else 'due_date'
-
+            
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
             
-            # 2. 날짜 추출
             date_match = re.search(r'(\d{1,2})[\./](\d{1,2})', prompt)
             if date_match:
                 date_val = f"{date_match.group(1)}/{date_match.group(2)}"
                 target_date = parse_date(date_val)
             else:
                 target_date = formatted_date
-                date_val = f"{selected_date.month}/{selected_date.day}"  # ← 추가
-
+                date_val = f"{selected_date.month}/{selected_date.day}"
+            
             if not target_date:
                 with st.chat_message("assistant"):
-                    error_msg = "❌ 날짜 형식을 인식할 수 없습니다. (예: 1/7)"
-                    st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    st.error("❌ 날짜 형식 오류")
             else:
-                with st.spinner("🤖 AI가 과거 패턴을 분석 중입니다..."):
+                with st.spinner("🤖 AI 분석 중..."):
                     try:
-                        # 3. 데이터 조회 (교차 검색)
                         df_2 = fetch_production_data(target_date, version='2차', date_type=search_col)
                         
                         if df_2 is None or df_2.empty:
                             alt_col = 'due_date' if search_col == 'production_date' else 'production_date'
                             df_2 = fetch_production_data(target_date, version='2차', date_type=alt_col)
                             if df_2 is not None and not df_2.empty:
-                                st.info(f"💡 {search_col} 기준 데이터가 없어 {alt_col} 기준으로 조회했습니다.")
+                                st.info(f"💡 {alt_col} 기준으로 조회했습니다.")
                                 search_col = alt_col
-
+                        
                         if df_2 is None or df_2.empty:
                             with st.chat_message("assistant"):
-                                error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다."
-                                st.error(error_msg)
-                                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                                st.error(f"❌ {date_val} 데이터 없음")
                         else:
-                            # 4. 문제 유형 감지 및 과거 사례 검색
                             issue_type = detect_issue_type(prompt)
                             similar_cases = find_similar_cases(historical_data, issue_type, target_date)
                             
                             if '비교' in version_option:
-                                # 비교 모드
                                 df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
                                 if df_1 is None or df_1.empty:
                                     df_base = fetch_production_data(target_date, version='0차', date_type=search_col)
-                                    comparison_type = "0차(원본) vs 2차(최종)"
+                                    comparison_type = "0차 vs 2차"
                                 else:
                                     df_base = df_1
-                                    comparison_type = "1차(팀원 배분) vs 2차(최종)"
+                                    comparison_type = "1차 vs 2차"
                                 
                                 if df_base is None or df_base.empty:
+                                    analysis = analyze_data(df_2)
+                                    answer = ask_professional_scheduler(
+                                        prompt, 
+                                        df_2.to_json(orient='columns'), 
+                                        json.dumps(analysis, ensure_ascii=False),
+                                        None,
+                                        json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None,
+                                        None
+                                    )
                                     with st.chat_message("assistant"):
-                                        st.warning(f"⚠️ 비교 기준 데이터가 없어 2차 데이터만 분석합니다.")
-                                        analysis = analyze_data(df_2)
-                                        
-                                        answer = ask_professional_scheduler(
-                                            prompt, 
-                                            df_2.to_json(orient='columns'), 
-                                            json.dumps(analysis, ensure_ascii=False),
-                                            None,
-                                            json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None,
-                                            None
-                                        )
+                                        st.warning("⚠️ 비교 기준 없음, 2차만 분석")
                                         st.markdown(answer)
                                         st.session_state.messages.append({"role": "assistant", "content": answer})
                                 else:
                                     comp_df = compare_versions(df_base, df_2)
                                     
-                                    # ✅ 수정된 코드
                                     if comp_df is None:
-                                    with st.chat_message("assistant"):
-                                    st.error("❌ 비교 데이터 생성 실패")
+                                        with st.chat_message("assistant"):
+                                            st.error("❌ 비교 실패")
                                     elif comp_df.empty:
-                                    with st.chat_message("assistant"):
-                                    st.warning("⚠️ 비교 가능한 데이터가 없습니다.")
-                                else:
+                                        with st.chat_message("assistant"):
+                                            st.warning("⚠️ 비교 데이터 없음")
+                                    else:
                                         analysis = analyze_data(df_2)
                                         base_version = comp_df['base_version'].iloc[0] if 'base_version' in comp_df.columns else '0차'
-
                                         
                                         answer = ask_professional_scheduler(
                                             prompt, 
@@ -717,44 +586,35 @@ def main():
                                         )
                                         
                                         with st.chat_message("assistant"):
-                                            st.markdown(f"**📊 비교 기준**: {comparison_type}\n\n")
+                                            st.markdown(f"**📊 {comparison_type}**\n\n")
                                             st.markdown(answer)
                                             st.session_state.messages.append({"role": "assistant", "content": answer})
                                         
                                         st.session_state.current_df = comp_df
                                         st.session_state.current_analysis = analysis
                                         st.session_state.current_date = target_date
-                                        st.session_state.similar_cases = similar_cases
                                         
                                         with right_col:
                                             st.subheader(f"📊 {comparison_type} ({date_val})")
+                                            show_changed = st.checkbox("변경된 항목만", value=True)
+                                            display_df = comp_df[comp_df['changed']] if show_changed else comp_df
                                             
-                                            show_changed_only = st.checkbox("변경된 항목만 보기", value=True)
-                                            display_df = comp_df[comp_df['changed']] if show_changed_only else comp_df
+                                            display_cols = ['due_date', 'line', 'product_name', 
+                                                          f'quantity_{base_version}', 'quantity_2차', 
+                                                          'qty_diff', 'status', 'remark']
                                             
-                                            display_columns = ['due_date', 'line', 'product_name', 
-                                                              f'quantity_{base_version}', 'quantity_2차', 
-                                                              'qty_diff', 'status', 'remark', 'worker_memo']
-                                            
-                                            st.dataframe(
-                                                display_df[display_columns],
-                                                use_container_width=True,
-                                                height=300
-                                            )
+                                            st.dataframe(display_df[display_cols], use_container_width=True, height=300)
                                             
                                             if similar_cases:
                                                 render_historical_cases(similar_cases)
                                             
-                                            excel_data = convert_df_to_excel(display_df)
                                             st.download_button(
-                                                label="📥 Excel 다운로드",
-                                                data=excel_data,
-                                                file_name=f"schedule_comparison_{target_date}.xlsx",
-                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                                "📥 Excel 다운로드",
+                                                convert_df_to_excel(display_df),
+                                                f"comparison_{target_date}.xlsx",
+                                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                             )
-                            
                             else:
-                                # 2차 단독 모드
                                 df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
                                 if df_1 is None or df_1.empty:
                                     df_1 = fetch_production_data(target_date, version='0차', date_type=search_col)
@@ -777,15 +637,14 @@ def main():
                                 st.session_state.current_df = df_2
                                 st.session_state.current_analysis = analysis
                                 st.session_state.current_date = target_date
-                                st.session_state.similar_cases = similar_cases
                                 
                                 with right_col:
-                                    st.subheader(f"📊 2차 데이터 상세 ({date_val})")
+                                    st.subheader(f"📊 2차 데이터 ({date_val})")
                                     
                                     filter_line = st.multiselect(
                                         "라인 필터",
-                                        options=['조립1', '조립2', '조립3'],
-                                        default=['조립1', '조립2', '조립3']
+                                        ['조립1', '조립2', '조립3'],
+                                        ['조립1', '조립2', '조립3']
                                     )
                                     
                                     filtered_df = df_2[df_2['line'].isin(filter_line)]
@@ -799,25 +658,21 @@ def main():
                                     if similar_cases:
                                         render_historical_cases(similar_cases)
                                     
-                                    excel_data = convert_df_to_excel(filtered_df)
                                     st.download_button(
-                                        label="📥 Excel 다운로드",
-                                        data=excel_data,
-                                        file_name=f"schedule_detail_{target_date}.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                        "📥 Excel 다운로드",
+                                        convert_df_to_excel(filtered_df),
+                                        f"schedule_{target_date}.xlsx",
+                                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                     )
                                 
                                 with dashboard_container:
-                                     render_dashboard(analysis, date_val, highlight_date=target_date)
-                                     render_violations(analysis)
-
+                                    render_dashboard(analysis, date_val, highlight_date=target_date)
+                                    render_violations(analysis)
                     
                     except Exception as e:
-                        logging.error(f"처리 중 오류 발생: {e}")
+                        logging.error(f"오류: {e}")
                         with st.chat_message("assistant"):
-                            error_msg = f"❌ 처리 중 오류가 발생했습니다: {str(e)}"
-                              st.error(error_msg)
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                            st.error(f"❌ 오류: {str(e)}")
     
     if st.session_state.current_df is not None and st.session_state.current_analysis is not None:
         with dashboard_container:
