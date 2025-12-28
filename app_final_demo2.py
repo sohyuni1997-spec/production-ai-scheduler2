@@ -95,7 +95,6 @@ def convert_df_to_excel(df):
     return output.getvalue()
 
 # ==================== 데이터 조회 함수 ====================
-
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_production_data(target_date, version='2차', date_type='due_date'):
     """
@@ -103,31 +102,33 @@ def fetch_production_data(target_date, version='2차', date_type='due_date'):
     date_type: 'due_date'(납기일 기준) 또는 'production_date'(생산일 기준)
     """
     try:
-        logging.info(f"DB 조회 시작: {version} 버전, 기준일 {target_date}, 기준컬럼 {date_type}")
+        start_date, end_date = get_date_range(target_date)
+        if not start_date:
+            logging.warning(f"날짜 범위 계산 실패: {target_date}")
+            return None
         
-        # 특정 날짜 하나에 대해 조회 (날짜 타입 불일치 방지를 위해 .eq 사용)
+        logging.info(f"DB 조회: {version}, {date_type}, {start_date}~{end_date}")
+        
         response = supabase.table(TABLE_NAME)\
             .select("*")\
             .eq("version", version)\
-            .eq(date_type, target_date)\
-            .order("due_date", desc=False)\
+            .gte(date_type, start_date)\
+            .lte(date_type, end_date)\
+            .order(date_type, desc=False)\
             .execute()
         
         if response.data:
             df = pd.DataFrame(response.data)
-            logging.info(f"데이터 조회 성공: {len(df)}건")
+            logging.info(f"조회 성공: {len(df)}건")
             return df
         else:
-            logging.warning(f"조회 결과 없음: {version}, {target_date} ({date_type})")
+            logging.warning(f"조회 결과 없음: {version}, {target_date}")
             return None
             
     except Exception as e:
         logging.error(f"DB 조회 오류: {e}")
         return None
-            
-    except Exception as e:
-        logging.error(f"DB 조회 오류: {e}")
-        return None
+
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_historical_data(days=90):
@@ -240,8 +241,15 @@ def find_similar_cases(historical_df, issue_type, target_date):
 
 def compare_versions(df_base, df_final):
     """기준 버전(0차 또는 1차)과 최종 버전(2차) 비교"""
-    if df_base is None or df_final is None:
+    if df_base is None or df_final is None or df_base.empty or df_final.empty:
+        logging.warning("비교할 데이터 중 하나가 비어있습니다.")
         return None
+    
+    try:
+        # 안전하게 컬럼 확인
+        base_version = '0차'
+        if 'version' in df_base.columns:
+            base_version = df_base['version'].iloc[0]
     
     try:
         base_version = df_base['version'].iloc[0] if 'version' in df_base.columns and len(df_base) > 0 else '0차'
@@ -609,22 +617,23 @@ def main():
             prompt = st.session_state.quick_question
             del st.session_state.quick_question
         
-        if prompt:
-            질문에 '생산'이라는 말이 있으면 생산일(production_date)로 검색하도록 설정
-            is_production_query = any(k in prompt for k in ['생산일', '생산계획', '가동일', '언제 생산'])
+                if prompt:
+            # 1. 질문 분석
+            is_production_query = any(k in prompt for k in ['생산', '가동', '계획', '작업'])
             search_col = 'production_date' if is_production_query else 'due_date'
 
             st.session_state.messages.append({"role": "user", "content": prompt})
             with st.chat_message("user"):
                 st.markdown(prompt)
             
-            date_match = re.search(r'(\d{1,2})/(\d{1,2})', prompt)
+            # 2. 날짜 추출
+            date_match = re.search(r'(\d{1,2})[\./](\d{1,2})', prompt)
             if date_match:
                 date_val = f"{date_match.group(1)}/{date_match.group(2)}"
                 target_date = parse_date(date_val)
             else:
                 target_date = formatted_date
-            
+
             if not target_date:
                 with st.chat_message("assistant"):
                     error_msg = "❌ 날짜 형식을 인식할 수 없습니다. (예: 1/7)"
@@ -633,68 +642,146 @@ def main():
             else:
                 with st.spinner("🤖 AI가 과거 패턴을 분석 중입니다..."):
                     try:
-                        issue_type = detect_issue_type(prompt)
-                        similar_cases = find_similar_cases(historical_data, issue_type, target_date)
+                        # 3. 데이터 조회 (교차 검색)
+                        df_2 = fetch_production_data(target_date, version='2차', date_type=search_col)
                         
-                        if '비교' in version_option:
-                            df_2 = fetch_production_data(target_date, version='2차', date_type=search_col)
-                            df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
+                        if df_2 is None or df_2.empty:
+                            alt_col = 'due_date' if search_col == 'production_date' else 'production_date'
+                            df_2 = fetch_production_data(target_date, version='2차', date_type=alt_col)
+                            if df_2 is not None and not df_2.empty:
+                                st.info(f"💡 {search_col} 기준 데이터가 없어 {alt_col} 기준으로 조회했습니다.")
+                                search_col = alt_col
+
+                        if df_2 is None or df_2.empty:
+                            with st.chat_message("assistant"):
+                                error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다."
+                                st.error(error_msg)
+                                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                        else:
+                            # 4. 문제 유형 감지 및 과거 사례 검색
+                            issue_type = detect_issue_type(prompt)
+                            similar_cases = find_similar_cases(historical_data, issue_type, target_date)
                             
-                            if df_1 is None or df_1.empty:
-                                df_base = fetch_production_data(target_date, version='0차')
-                                comparison_type = "0차(원본) vs 2차(최종)"
-                            else:
-                                df_base = df_1
-                                comparison_type = "1차(팀원 배분) vs 2차(최종)"
+                            if '비교' in version_option:
+                                # 비교 모드
+                                df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
+                                if df_1 is None or df_1.empty:
+                                    df_base = fetch_production_data(target_date, version='0차', date_type=search_col)
+                                    comparison_type = "0차(원본) vs 2차(최종)"
+                                else:
+                                    df_base = df_1
+                                    comparison_type = "1차(팀원 배분) vs 2차(최종)"
+                                
+                                if df_base is None or df_base.empty:
+                                    with st.chat_message("assistant"):
+                                        st.warning(f"⚠️ 비교 기준 데이터가 없어 2차 데이터만 분석합니다.")
+                                        analysis = analyze_data(df_2)
+                                        
+                                        answer = ask_professional_scheduler(
+                                            prompt, 
+                                            df_2.to_json(orient='columns'), 
+                                            json.dumps(analysis, ensure_ascii=False),
+                                            None,
+                                            json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None,
+                                            None
+                                        )
+                                        st.markdown(answer)
+                                        st.session_state.messages.append({"role": "assistant", "content": answer})
+                                else:
+                                    comp_df = compare_versions(df_base, df_2)
+                                    
+                                    if comp_df is None:
+                                        with st.chat_message("assistant"):
+                                            st.error("❌ 비교 데이터 생성 실패")
+                                    else:
+                                        analysis = analyze_data(df_2)
+                                        base_version = comp_df['base_version'].iloc[0] if 'base_version' in comp_df.columns else '0차'
+                                        
+                                        answer = ask_professional_scheduler(
+                                            prompt, 
+                                            df_2.to_json(orient='columns'), 
+                                            json.dumps(analysis, ensure_ascii=False), 
+                                            comp_df.to_json(orient='columns'),
+                                            json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None,
+                                            df_base.to_json(orient='columns')
+                                        )
+                                        
+                                        with st.chat_message("assistant"):
+                                            st.markdown(f"**📊 비교 기준**: {comparison_type}\n\n")
+                                            st.markdown(answer)
+                                            st.session_state.messages.append({"role": "assistant", "content": answer})
+                                        
+                                        st.session_state.current_df = comp_df
+                                        st.session_state.current_analysis = analysis
+                                        st.session_state.current_date = target_date
+                                        st.session_state.similar_cases = similar_cases
+                                        
+                                        with right_col:
+                                            st.subheader(f"📊 {comparison_type} ({date_val})")
+                                            
+                                            show_changed_only = st.checkbox("변경된 항목만 보기", value=True)
+                                            display_df = comp_df[comp_df['changed']] if show_changed_only else comp_df
+                                            
+                                            display_columns = ['due_date', 'line', 'product_name', 
+                                                              f'quantity_{base_version}', 'quantity_2차', 
+                                                              'qty_diff', 'status', 'remark', 'worker_memo']
+                                            
+                                            st.dataframe(
+                                                display_df[display_columns],
+                                                use_container_width=True,
+                                                height=300
+                                            )
+                                            
+                                            if similar_cases:
+                                                render_historical_cases(similar_cases)
+                                            
+                                            excel_data = convert_df_to_excel(display_df)
+                                            st.download_button(
+                                                label="📥 Excel 다운로드",
+                                                data=excel_data,
+                                                file_name=f"schedule_comparison_{target_date}.xlsx",
+                                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                            )
                             
-                            if df_base is None or df_2 is None:
-                                with st.chat_message("assistant"):
-                                    error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다.\n기준 데이터: {'있음' if df_base is not None else '없음'}\n2차 데이터: {'있음' if df_2 is not None else '없음'}"
-                                    st.error(error_msg)
-                                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
                             else:
-                                comp_df = compare_versions(df_base, df_2)
+                                # 2차 단독 모드
+                                df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
+                                if df_1 is None or df_1.empty:
+                                    df_1 = fetch_production_data(target_date, version='0차', date_type=search_col)
+                                
                                 analysis = analyze_data(df_2)
-                                
-                                base_version = comp_df['base_version'].iloc[0] if 'base_version' in comp_df.columns else '0차'
-                                
-                                df_json = df_2.to_json(orient='columns')
-                                analysis_json = json.dumps(analysis, ensure_ascii=False)
-                                comp_json = comp_df.to_json(orient='columns')
-                                original_plan_json = df_base.to_json(orient='columns')
-                                historical_cases_json = json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None
                                 
                                 answer = ask_professional_scheduler(
                                     prompt, 
-                                    df_json, 
-                                    analysis_json, 
-                                    comp_json,
-                                    historical_cases_json,
-                                    original_plan_json
+                                    df_2.to_json(orient='columns'), 
+                                    json.dumps(analysis, ensure_ascii=False),
+                                    None,
+                                    json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None,
+                                    df_1.to_json(orient='columns') if df_1 is not None else None
                                 )
                                 
                                 with st.chat_message("assistant"):
-                                    st.markdown(f"**📊 비교 기준**: {comparison_type}\n\n")
                                     st.markdown(answer)
                                     st.session_state.messages.append({"role": "assistant", "content": answer})
                                 
-                                st.session_state.current_df = comp_df
+                                st.session_state.current_df = df_2
                                 st.session_state.current_analysis = analysis
                                 st.session_state.current_date = target_date
                                 st.session_state.similar_cases = similar_cases
                                 
                                 with right_col:
-                                    st.subheader(f"📊 {comparison_type} ({date_val})")
+                                    st.subheader(f"📊 2차 데이터 상세 ({date_val})")
                                     
-                                    show_changed_only = st.checkbox("변경된 항목만 보기", value=True)
-                                    display_df = comp_df[comp_df['changed']] if show_changed_only else comp_df
+                                    filter_line = st.multiselect(
+                                        "라인 필터",
+                                        options=['조립1', '조립2', '조립3'],
+                                        default=['조립1', '조립2', '조립3']
+                                    )
                                     
-                                    display_columns = ['due_date', 'line', 'product_name', 
-                                                      f'quantity_{base_version}', 'quantity_2차', 
-                                                      'qty_diff', 'status', 'remark', 'worker_memo']
+                                    filtered_df = df_2[df_2['line'].isin(filter_line)]
                                     
                                     st.dataframe(
-                                        display_df[display_columns],
+                                        filtered_df[['due_date', 'line', 'product_name', 'product_type', 'quantity', 'plt', 'status', 'remark']],
                                         use_container_width=True,
                                         height=300
                                     )
@@ -702,28 +789,25 @@ def main():
                                     if similar_cases:
                                         render_historical_cases(similar_cases)
                                     
-                                    excel_data = convert_df_to_excel(display_df)
+                                    excel_data = convert_df_to_excel(filtered_df)
                                     st.download_button(
                                         label="📥 Excel 다운로드",
                                         data=excel_data,
-                                        file_name=f"schedule_comparison_{target_date}.xlsx",
+                                        file_name=f"schedule_detail_{target_date}.xlsx",
                                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                     )
-                        
-                        else:
-                            df = fetch_production_data(target_date, version='2차', date_type=search_col)
-                            
-                            df_1 = fetch_production_data(target_date, version='1차')
-                            if df_1 is None or df_1.empty:
-                                df_1 = fetch_production_data(target_date, version='0차')
-                            
-                            if df is None:
-                                with st.chat_message("assistant"):
-                                    error_msg = f"❌ {date_val} 데이터를 찾을 수 없습니다."
-                                    st.error(error_msg)
-                                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
-                            else:
-                                analysis = analyze_data(df)
+                                
+                                with dashboard_container:
+                                    render_dashboard(analysis, date_val)
+                                    render_violations(analysis)
+                    
+                    except Exception as e:
+                        logging.error(f"처리 중 오류 발생: {e}")
+                        with st.chat_message("assistant"):
+                            error_msg = f"❌ 처리 중 오류가 발생했습니다: {str(e)}"
+                            st.error(error_msg)
+                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
+
                                 
                                 df_json = df.to_json(orient='columns')
                                 analysis_json = json.dumps(analysis, ensure_ascii=False)
