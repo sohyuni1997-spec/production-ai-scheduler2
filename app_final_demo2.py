@@ -95,12 +95,10 @@ def convert_df_to_excel(df):
     return output.getvalue()
 
 # ==================== 데이터 조회 함수 ====================
+
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_production_data(target_date, version='2차', date_type='due_date'):
-    """
-    DB에서 생산 데이터 조회 
-    date_type: 'due_date'(납기일 기준) 또는 'production_date'(생산일 기준)
-    """
+    """DB에서 생산 데이터 조회"""
     try:
         start_date, end_date = get_date_range(target_date)
         if not start_date:
@@ -129,10 +127,9 @@ def fetch_production_data(target_date, version='2차', date_type='due_date'):
         logging.error(f"DB 조회 오류: {e}")
         return None
 
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_historical_data(days=90):
-    """과거 N일간의 데이터 조회 (모든 버전)"""
+    """과거 N일간의 데이터 조회"""
     try:
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
@@ -240,7 +237,7 @@ def find_similar_cases(historical_df, issue_type, target_date):
         return None
 
 def compare_versions(df_base, df_final):
-    """기준 버전(0차 또는 1차)과 최종 버전(2차) 비교"""
+    """기준 버전과 최종 버전 비교"""
     if df_base is None or df_final is None or df_base.empty or df_final.empty:
         logging.warning("비교할 데이터 중 하나가 비어있습니다.")
         return None
@@ -268,7 +265,6 @@ def compare_versions(df_base, df_final):
     except Exception as e:
         logging.error(f"버전 비교 오류: {e}")
         return None
-
 
 def analyze_data(df, version='2차'):
     """생산 데이터 종합 분석"""
@@ -327,7 +323,7 @@ def analyze_data(df, version='2차'):
 
 @st.cache_data(ttl=300, show_spinner=False)
 def ask_professional_scheduler(question, df_json, analysis_json, comparison_json=None, historical_cases_json=None, original_plan_json=None):
-    """Potens AI API 호출 - 과거 패턴 학습 포함"""
+    """Potens AI API 호출"""
     api_url = "https://ai.potens.ai/api/chat"
     headers = {
         "Content-Type": "application/json",
@@ -376,7 +372,7 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
             comp_dict = json.loads(comparison_json)
             changed_count = sum(1 for v in comp_dict.get('changed', {}).values() if v)
             if changed_count > 0:
-                change_summary = f"\n\n[📊 0차 대비 2차 변경사항]\n총 {changed_count}건 변경됨"
+                change_summary = f"\n\n[📊 변경사항]\n총 {changed_count}건 변경됨"
         
         violations = []
         if analysis.get('fan_violations'):
@@ -388,11 +384,6 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
         
         system_prompt = f"""당신은 자동차 부품 조립라인의 '수석 생산 스케줄러'입니다.
 **과거 데이터를 학습하여 실제 해결 사례 기반으로 조언하세요.**
-
-[날짜 개념 정의]
-- **due_date (납기일)**: 고객과 약속한 날짜
-- **production_date (생산일)**: 실제 공장에서 가동하는 날짜
-- **분석 규칙**: 생산일이 납기일보다 빠르면 '선행 생산', 늦으면 '지연 생산'입니다. 이 차이를 반드시 언급하세요.
 
 [핵심 규칙]
 1. **[PLT] 태그**: remark에 '[PLT]' 포함 시 → 배수 무시, 박스/로트 단위 우선
@@ -420,14 +411,13 @@ def ask_professional_scheduler(question, df_json, analysis_json, comparison_json
 **중요**: 
 - [PLT] 태그가 있는 항목은 정상으로 간주
 - 과거 사례의 remark와 worker_memo를 참고하여 실제 현장에서 사용한 방법 우선 제안
-- 1차 계획과 비교하여 무엇이 변경되었는지 언급
 """
         
         payload = {
             "prompt": f"{system_prompt}\n\n[긴급 요청]\n{question}"
         }
         
-        logging.info(f"AI 요청 전송 (과거 패턴 포함): {question[:50]}...")
+        logging.info(f"AI 요청 전송: {question[:50]}...")
         
         response = requests.post(
             api_url,
@@ -540,7 +530,7 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    st.title("👨‍✈️ 수석 스케줄러 AI 통합 제어 센터 (과거 패턴 학습)")
+    st.title("👨‍✈️ 수석 스케줄러 AI 통합 제어 센터")
     st.caption("Real-time Production Scheduling with AI Assistant & Historical Pattern Learning")
     
     if "messages" not in st.session_state:
@@ -578,10 +568,10 @@ def main():
         st.subheader("💡 빠른 질문")
         
         quick_questions = {
-            "CAPA 초과 분석 (과거 사례 포함)": f"{selected_date.month}/{selected_date.day} CAPA 초과 날짜 분석해줘. 과거에는 어떻게 해결했어?",
-            "요일 규칙 위반 (과거 사례)": f"{selected_date.month}/{selected_date.day} 요일 규칙 위반 확인하고 과거 해결 방법 알려줘",
-            "1차 대비 변경사항": f"{selected_date.month}/{selected_date.day} 1차 계획 대비 무엇이 변경되었고 왜 변경했는지 분석해줘",
-            "긴급 조치 필요 (과거 참고)": f"{selected_date.month}/{selected_date.day} 긴급 조치가 필요한 항목과 과거 성공 사례 알려줘"
+            "CAPA 초과 분석": f"{selected_date.month}/{selected_date.day} CAPA 초과 날짜 분석해줘. 과거에는 어떻게 해결했어?",
+            "요일 규칙 위반": f"{selected_date.month}/{selected_date.day} 요일 규칙 위반 확인하고 과거 해결 방법 알려줘",
+            "변경사항 분석": f"{selected_date.month}/{selected_date.day} 계획 대비 무엇이 변경되었고 왜 변경했는지 분석해줘",
+            "긴급 조치 필요": f"{selected_date.month}/{selected_date.day} 긴급 조치가 필요한 항목과 과거 성공 사례 알려줘"
         }
         
         for label, question in quick_questions.items():
@@ -606,14 +596,13 @@ def main():
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
         
-                prompt = st.chat_input("질문을 입력하세요 (예: 1/7 CAPA 초과 어떻게 해결했었어?)")
+        prompt = st.chat_input("질문을 입력하세요 (예: 11/14 조립1 공정감사로 CAPA 감소 어떻게 해?)")
         
         if "quick_question" in st.session_state:
             prompt = st.session_state.quick_question
             del st.session_state.quick_question
         
-        if prompt:  # ← 들여쓰기 수정 (공백 8개)
-            # 1. 질문 분석
+        if prompt:
             is_production_query = any(k in prompt for k in ['생산', '가동', '계획', '작업'])
             search_col = 'production_date' if is_production_query else 'due_date'
 
@@ -621,24 +610,22 @@ def main():
             with st.chat_message("user"):
                 st.markdown(prompt)
             
-            # 2. 날짜 추출
             date_match = re.search(r'(\d{1,2})[\./](\d{1,2})', prompt)
             if date_match:
                 date_val = f"{date_match.group(1)}/{date_match.group(2)}"
                 target_date = parse_date(date_val)
             else:
                 target_date = formatted_date
-                date_val = f"{selected_date.month}/{selected_date.day}"  # ← 추가
+                date_val = f"{selected_date.month}/{selected_date.day}"
 
             if not target_date:
                 with st.chat_message("assistant"):
-                    error_msg = "❌ 날짜 형식을 인식할 수 없습니다. (예: 1/7)"
+                    error_msg = "❌ 날짜 형식을 인식할 수 없습니다. (예: 11/14)"
                     st.error(error_msg)
                     st.session_state.messages.append({"role": "assistant", "content": error_msg})
             else:
                 with st.spinner("🤖 AI가 과거 패턴을 분석 중입니다..."):
                     try:
-                        # 3. 데이터 조회 (교차 검색)
                         df_2 = fetch_production_data(target_date, version='2차', date_type=search_col)
                         
                         if df_2 is None or df_2.empty:
@@ -654,12 +641,10 @@ def main():
                                 st.error(error_msg)
                                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
                         else:
-                            # 4. 문제 유형 감지 및 과거 사례 검색
                             issue_type = detect_issue_type(prompt)
                             similar_cases = find_similar_cases(historical_data, issue_type, target_date)
                             
                             if '비교' in version_option:
-                                # 비교 모드
                                 df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
                                 if df_1 is None or df_1.empty:
                                     df_base = fetch_production_data(target_date, version='0차', date_type=search_col)
@@ -683,12 +668,27 @@ def main():
                                         )
                                         st.markdown(answer)
                                         st.session_state.messages.append({"role": "assistant", "content": answer})
+                                        
+                                        st.session_state.current_df = df_2
+                                        st.session_state.current_analysis = analysis
+                                        st.session_state.current_date = target_date
+                                        
+                                        with right_col:
+                                            st.subheader(f"📊 2차 데이터 ({date_val})")
+                                            st.dataframe(
+                                                df_2[['due_date', 'line', 'product_name', 'quantity', 'status', 'remark']],
+                                                use_container_width=True,
+                                                height=300
+                                            )
                                 else:
                                     comp_df = compare_versions(df_base, df_2)
                                     
-                                    if comp_df is None or comp_df.empty:
+                                    if comp_df is None:
                                         with st.chat_message("assistant"):
                                             st.error("❌ 비교 데이터 생성 실패")
+                                    elif comp_df.empty:
+                                        with st.chat_message("assistant"):
+                                            st.warning("⚠️ 비교 가능한 데이터가 없습니다.")
                                     else:
                                         analysis = analyze_data(df_2)
                                         base_version = comp_df['base_version'].iloc[0] if 'base_version' in comp_df.columns else '0차'
@@ -740,7 +740,6 @@ def main():
                                             )
                             
                             else:
-                                # 2차 단독 모드
                                 df_1 = fetch_production_data(target_date, version='1차', date_type=search_col)
                                 if df_1 is None or df_1.empty:
                                     df_1 = fetch_production_data(target_date, version='0차', date_type=search_col)
