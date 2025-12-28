@@ -54,7 +54,7 @@ def parse_date(date_str):
         logging.error(f"날짜 파싱 오류: {date_str} - {e}")
         return None
 
-def get_date_range(target_date, days_before=14, days_after=7):
+def get_date_range(target_date, days_before=0, days_after=0):
     try:
         dt = datetime.strptime(target_date, '%Y-%m-%d')
         start = (dt - timedelta(days=days_before)).strftime('%Y-%m-%d')
@@ -93,13 +93,17 @@ def fetch_production_data(target_date, version='2차', date_type='due_date'):
         response = supabase.table(TABLE_NAME)\
             .select("*")\
             .eq("version", version)\
-            .gte(date_type, start_date)\
-            .lte(date_type, end_date)\
-            .order(date_type, desc=False)\
+            .eq(date_type, target_date)\
+            .order("due_date", desc=False)\
             .execute()
         
         if response.data:
             df = pd.DataFrame(response.data)
+            if 'id' in df.columns:
+                df = df.drop_duplicates(subset=['id'])
+            else:
+                df = df.drop_duplicates()
+            
             logging.info(f"조회 성공: {len(df)}건")
             return df
         return None
