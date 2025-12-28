@@ -246,12 +246,6 @@ def compare_versions(df_base, df_final):
         return None
     
     try:
-        # 안전하게 컬럼 확인
-        base_version = '0차'
-        if 'version' in df_base.columns:
-            base_version = df_base['version'].iloc[0]
-    
-    try:
         base_version = df_base['version'].iloc[0] if 'version' in df_base.columns and len(df_base) > 0 else '0차'
         
         merged = pd.merge(
@@ -274,6 +268,7 @@ def compare_versions(df_base, df_final):
     except Exception as e:
         logging.error(f"버전 비교 오류: {e}")
         return None
+
 
 def analyze_data(df, version='2차'):
     """생산 데이터 종합 분석"""
@@ -611,13 +606,13 @@ def main():
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
         
-        prompt = st.chat_input("질문을 입력하세요 (예: 1/7 CAPA 초과 어떻게 해결했었어?)")
+                prompt = st.chat_input("질문을 입력하세요 (예: 1/7 CAPA 초과 어떻게 해결했었어?)")
         
         if "quick_question" in st.session_state:
             prompt = st.session_state.quick_question
             del st.session_state.quick_question
         
-                if prompt:
+        if prompt:  # ← 들여쓰기 수정 (공백 8개)
             # 1. 질문 분석
             is_production_query = any(k in prompt for k in ['생산', '가동', '계획', '작업'])
             search_col = 'production_date' if is_production_query else 'due_date'
@@ -633,6 +628,7 @@ def main():
                 target_date = parse_date(date_val)
             else:
                 target_date = formatted_date
+                date_val = f"{selected_date.month}/{selected_date.day}"  # ← 추가
 
             if not target_date:
                 with st.chat_message("assistant"):
@@ -690,7 +686,7 @@ def main():
                                 else:
                                     comp_df = compare_versions(df_base, df_2)
                                     
-                                    if comp_df is None:
+                                    if comp_df is None or comp_df.empty:
                                         with st.chat_message("assistant"):
                                             st.error("❌ 비교 데이터 생성 실패")
                                     else:
@@ -779,69 +775,6 @@ def main():
                                     )
                                     
                                     filtered_df = df_2[df_2['line'].isin(filter_line)]
-                                    
-                                    st.dataframe(
-                                        filtered_df[['due_date', 'line', 'product_name', 'product_type', 'quantity', 'plt', 'status', 'remark']],
-                                        use_container_width=True,
-                                        height=300
-                                    )
-                                    
-                                    if similar_cases:
-                                        render_historical_cases(similar_cases)
-                                    
-                                    excel_data = convert_df_to_excel(filtered_df)
-                                    st.download_button(
-                                        label="📥 Excel 다운로드",
-                                        data=excel_data,
-                                        file_name=f"schedule_detail_{target_date}.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                    )
-                                
-                                with dashboard_container:
-                                    render_dashboard(analysis, date_val)
-                                    render_violations(analysis)
-                    
-                    except Exception as e:
-                        logging.error(f"처리 중 오류 발생: {e}")
-                        with st.chat_message("assistant"):
-                            error_msg = f"❌ 처리 중 오류가 발생했습니다: {str(e)}"
-                            st.error(error_msg)
-                            st.session_state.messages.append({"role": "assistant", "content": error_msg})
-
-                                
-                                df_json = df.to_json(orient='columns')
-                                analysis_json = json.dumps(analysis, ensure_ascii=False)
-                                original_plan_json = df_1.to_json(orient='columns') if df_1 is not None else None
-                                historical_cases_json = json.dumps(similar_cases, ensure_ascii=False) if similar_cases else None
-                                
-                                answer = ask_professional_scheduler(
-                                    prompt, 
-                                    df_json, 
-                                    analysis_json,
-                                    None,
-                                    historical_cases_json,
-                                    original_plan_json
-                                )
-                                
-                                with st.chat_message("assistant"):
-                                    st.markdown(answer)
-                                    st.session_state.messages.append({"role": "assistant", "content": answer})
-                                
-                                st.session_state.current_df = df
-                                st.session_state.current_analysis = analysis
-                                st.session_state.current_date = target_date
-                                st.session_state.similar_cases = similar_cases
-                                
-                                with right_col:
-                                    st.subheader(f"📊 2차 데이터 상세 ({date_val})")
-                                    
-                                    filter_line = st.multiselect(
-                                        "라인 필터",
-                                        options=['조립1', '조립2', '조립3'],
-                                        default=['조립1', '조립2', '조립3']
-                                    )
-                                    
-                                    filtered_df = df[df['line'].isin(filter_line)]
                                     
                                     st.dataframe(
                                         filtered_df[['due_date', 'line', 'product_name', 'product_type', 'quantity', 'plt', 'status', 'remark']],
